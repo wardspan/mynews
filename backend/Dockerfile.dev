@@ -1,0 +1,28 @@
+FROM python:3.9-slim
+
+WORKDIR /app/
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements file
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV PORT=8000
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# For development, we'll mount the current directory as a volume
+# and use the uvicorn reload flag, so we don't need to copy the code here
+
+# The actual command will be provided by docker-compose.yml for development
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

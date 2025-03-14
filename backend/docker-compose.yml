@@ -1,0 +1,21 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+    environment:
+      - MONGODB_URL=${MONGODB_URL}
+      - SECRET_KEY=${SECRET_KEY}
+      - NEWSAPI_API_KEY=${NEWSAPI_API_KEY}
+      - GNEWS_API_KEY=${GNEWS_API_KEY}
+      - GUARDIAN_API_KEY=${GUARDIAN_API_KEY}
+      - MEDIASTACK_API_KEY=${MEDIASTACK_API_KEY}
+      - COINGECKO_API_KEY=${COINGECKO_API_KEY}
+      - ALPHAVANTAGE_API_KEY=${ALPHAVANTAGE_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/google-credentials.json
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
