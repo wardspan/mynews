@@ -1,12 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 import uuid
+import logging
 
 from ...db.base import get_database
 from ...schemas.article import Article, ArticleCreate, ArticleInDB
 from ...services.news_api_service import get_articles
+from ...core.config import settings
 from motor.motor_asyncio import AsyncIOMotorDatabase
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -15,16 +19,29 @@ async def read_articles(
     skip: int = 0,
     limit: int = 20,
     category: Optional[str] = None,
+    source: Optional[str] = None,
+    search: Optional[str] = None,
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
     """
-    Retrieve articles with optional category filtering.
+    Retrieve articles with optional filtering.
     """
     try:
         # Build query filter
         filter_query = {}
+        
         if category:
             filter_query["categories"] = category
+            
+        if source:
+            filter_query["source"] = source
+            
+        if search:
+            filter_query["$or"] = [
+                {"title": {"$regex": search, "$options": "i"}},
+                {"synopsis": {"$regex": search, "$options": "i"}},
+                {"content": {"$regex": search, "$options": "i"}}
+            ]
         
         # Get articles from database
         cursor = db["articles"].find(filter_query).sort("published_date", -1).skip(skip).limit(limit)
@@ -56,6 +73,7 @@ async def get_latest_articles(
     limit: int = 20,
     refresh: bool = False,
     categories: Optional[List[str]] = Query(None),
+    sources: Optional[List[str]] = Query(None, description="Filter by news sources (newsapi, gnews, guardian)"),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
     """
@@ -65,6 +83,23 @@ async def get_latest_articles(
         if refresh:
             # Fetch new articles from news APIs
             new_articles = await get_articles(categories)
+            
+            # Filter by source if requested
+            if sources:
+                source_map = {
+                    "newsapi": "NewsAPI",
+                    "gnews": "GNews", 
+                    "guardian": "The Guardian"
+                }
+                
+                # Convert sources to their display names
+                source_display_names = [source_map.get(s.lower(), s) for s in sources]
+                
+                # Filter articles by source
+                new_articles = [
+                    article for article in new_articles
+                    if article.get("source") in source_display_names
+                ]
             
             # Insert new articles if they don't exist
             if new_articles:
@@ -85,10 +120,31 @@ async def get_latest_articles(
                     except Exception as e:
                         logger.error(f"Error saving article: {str(e)}")
         
+        # Build query for retrieving articles
+        filter_query = {}
+        
+        # Add source filter if requested
+        if sources:
+            source_map = {
+                "newsapi": "NewsAPI",
+                "gnews": "GNews", 
+                "guardian": "The Guardian"
+            }
+            source_display_names = [source_map.get(s.lower(), s) for s in sources]
+            filter_query["source"] = {"$in": source_display_names}
+            
+        # Add category filter if requested
+        if categories:
+            filter_query["categories"] = {"$in": categories}
+        
         # Get the latest articles from database
-        cursor = db["articles"].find().sort("published_date", -1).limit(limit)
+        cursor = db["articles"].find(filter_query).sort("published_date", -1).limit(limit)
         
         articles = await cursor.to_list(length=limit)
+        
+        # Log the number of articles retrieved
+        logger.info(f"Retrieved {len(articles)} articles from database")
+        
         return articles
     except Exception as e:
         logger.exception(f"Error in get_latest_articles: {str(e)}")
@@ -160,3 +216,55 @@ async def create_article(
     except Exception as e:
         logger.exception(f"Error creating article: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/sources/list", response_model=List[Dict[str, Any]])
+async def get_sources():
+    """
+    Get information about available news sources.
+    """
+    sources = [
+        {
+            "id": "newsapi",
+            "name": "NewsAPI.org",
+            "enabled": bool(settings.NEWSAPI_API_KEY),
+            "description": "Provides breaking news headlines and search for articles from over 80,000 sources.",
+            "categories": ["business", "entertainment", "general", "health", "science", "sports", "technology"]
+        },
+        {
+            "id": "gnews",
+            "name": "GNews API",
+            "enabled": bool(settings.GNEWS_API_KEY),
+            "description": "Searchable and real-time news data from various sources around the web.",
+            "categories": ["business", "entertainment", "health", "science", "sports", "technology", "world", "nation"]
+        },
+        {
+            "id": "guardian",
+            "name": "The Guardian",
+            "enabled": bool(settings.GUARDIAN_API_KEY),
+            "description": "Open platform for accessing Guardian content, providing a rich set of articles.",
+            "categories": ["business", "technology", "sport", "politics", "science", "society", "culture", "environment", "world"]
+        }
+    ]
+    
+    return sources
+
+@router.get("/categories/list", response_model=List[Dict[str, Any]])
+async def get_all_categories():
+    """
+    Get all available article categories from all sources.
+    """
+    # Combine categories from all sources
+    categories = [
+        {"id": "business", "name": "Business", "sources": ["newsapi", "gnews", "guardian"]},
+        {"id": "technology", "name": "Technology", "sources": ["newsapi", "gnews", "guardian"]},
+        {"id": "entertainment", "name": "Entertainment", "sources": ["newsapi", "gnews"]},
+        {"id": "health", "name": "Health", "sources": ["newsapi", "gnews"]},
+        {"id": "science", "name": "Science", "sources": ["newsapi", "gnews", "guardian"]},
+        {"id": "sports", "name": "Sports", "sources": ["newsapi", "gnews", "guardian"]},
+        {"id": "world", "name": "World", "sources": ["gnews", "guardian"]},
+        {"id": "politics", "name": "Politics", "sources": ["guardian"]},
+        {"id": "environment", "name": "Environment", "sources": ["guardian"]},
+        {"id": "culture", "name": "Culture", "sources": ["guardian"]},
+    ]
+    
+    return categories
